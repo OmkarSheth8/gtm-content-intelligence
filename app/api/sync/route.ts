@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { runSync } from "@/lib/syncPipeline";
+import { validateSyncAuth } from "@/lib/syncAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -6,15 +8,23 @@ export const dynamic = "force-dynamic";
 // POST /api/sync
 // Authorization: Bearer <CRON_SECRET>
 export async function POST(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { authorized, debug } = validateSyncAuth(request);
+
+  if (!authorized) {
+    const body =
+      process.env.NODE_ENV === "development"
+        ? { error: "Unauthorized", debug }
+        : { error: "Unauthorized" };
+    return NextResponse.json(body, { status: 401 });
   }
 
-  // Phase 2: same pipeline as /api/cron/sync
-  return NextResponse.json({
-    ok: true,
-    message: "Manual sync triggered — implement pipeline in Phase 2",
-    timestamp: new Date().toISOString(),
-  });
+  try {
+    const result = await runSync("manual");
+    return NextResponse.json({ ok: true, ...result });
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : "Sync failed" },
+      { status: 500 }
+    );
+  }
 }

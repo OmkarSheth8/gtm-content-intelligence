@@ -11,9 +11,9 @@ export interface ContentPayload {
 
 export interface MetricPayload {
   platformContentId: string;
-  views: number;
-  likes: number;
-  comments: number;
+  views: bigint;
+  likes: bigint;
+  comments: bigint;
   snapshotAt: Date;
 }
 

@@ -1,18 +1,35 @@
-export default function MetricCards() {
+interface MetricsData {
+  totalViews: string;
+  avgEngagementRate: string;
+  topTopic: string;
+  videoCount: number;
+}
+
+interface Props {
+  metrics: MetricsData;
+}
+
+export default function MetricCards({ metrics }: Props) {
+  const cards = [
+    { label: "Total Views", value: metrics.totalViews },
+    { label: "Avg Engagement Rate", value: metrics.avgEngagementRate },
+    { label: "Top Performing Topic", value: metrics.topTopic },
+    { label: "Videos Tracked", value: String(metrics.videoCount) },
+  ];
+
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-      {[
-        { label: "Total Views", value: "—" },
-        { label: "Avg Engagement Rate", value: "—" },
-        { label: "Top Performing Topic", value: "—" },
-        { label: "Videos Tracked", value: "—" },
-      ].map((card) => (
-        <div key={card.label} className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-          <p className="text-xs text-zinc-500 uppercase tracking-wide">{card.label}</p>
+      {cards.map((card) => (
+        <div
+          key={card.label}
+          className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <p className="text-xs text-zinc-500 uppercase tracking-wide">
+            {card.label}
+          </p>
           <p className="mt-1 text-2xl font-semibold">{card.value}</p>
         </div>
       ))}
-      <p className="col-span-full text-xs text-zinc-400">Populated in Phase 4 after YouTube ingestion.</p>
     </div>
   );
 }
