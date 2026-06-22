@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { classifyContent } from "@/lib/classification";
+import { generateAndPersistRecommendations } from "@/lib/recommendations";
 import { YouTubeAdapter } from "@/lib/youtube";
 
 export interface SyncSummary {
@@ -153,6 +154,16 @@ export async function runSync(
           classifiedBy: "rules",
         },
       });
+    }
+
+    // Refresh recommendations after new data lands — best-effort, never fails the sync
+    try {
+      await generateAndPersistRecommendations(prisma);
+    } catch (err) {
+      console.warn(
+        "Recommendation generation skipped:",
+        err instanceof Error ? err.message : String(err)
+      );
     }
 
     // Mark the run successful with counts
