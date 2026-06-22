@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { classifyContent } from "@/lib/classification";
 import { YouTubeAdapter } from "@/lib/youtube";
 
 export interface SyncSummary {
@@ -102,6 +103,56 @@ export async function runSync(
         },
       });
       snapshotsInserted++;
+    }
+
+    // Classify newly synced content.
+    // Protected classifiers (seed, manual, llm, ai) are never overwritten.
+    // Only items with no classification or an existing "rules" classification are updated.
+    const PROTECTED_CLASSIFIERS = new Set(["seed", "manual", "llm", "ai"]);
+
+    const existingClassifications = await prisma.contentClassification.findMany({
+      where: { contentItemId: { in: Array.from(contentIdMap.values()) } },
+      select: { contentItemId: true, classifiedBy: true },
+    });
+    const existingByItemId = new Map(
+      existingClassifications.map((c) => [c.contentItemId, c.classifiedBy])
+    );
+
+    for (const payload of contentPayloads) {
+      const contentItemId = contentIdMap.get(payload.platformContentId);
+      if (!contentItemId) continue;
+
+      const existingClassifiedBy = existingByItemId.get(contentItemId);
+      if (existingClassifiedBy && PROTECTED_CLASSIFIERS.has(existingClassifiedBy)) {
+        continue;
+      }
+
+      const result = classifyContent(payload.title, payload.description ?? "");
+
+      await prisma.contentClassification.upsert({
+        where: { contentItemId },
+        update: {
+          topic: result.topic,
+          format: result.format,
+          hook: result.hook,
+          angle: result.angle,
+          funnelStage: result.funnelStage,
+          audiencePersona: result.audiencePersona,
+          classifiedAt: new Date(),
+          classifiedBy: "rules",
+          modelVersion: null,
+        },
+        create: {
+          contentItemId,
+          topic: result.topic,
+          format: result.format,
+          hook: result.hook,
+          angle: result.angle,
+          funnelStage: result.funnelStage,
+          audiencePersona: result.audiencePersona,
+          classifiedBy: "rules",
+        },
+      });
     }
 
     // Mark the run successful with counts

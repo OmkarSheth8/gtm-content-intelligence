@@ -9,7 +9,8 @@
     "lint": "eslint",
     "seed": "tsx prisma/seed.ts",
     "sync:manual": "tsx scripts/manual-sync.ts",
-    "youtube:diagnose": "tsx scripts/diagnose-youtube.ts"
+    "youtube:diagnose": "tsx scripts/diagnose-youtube.ts",
+    "classify": "tsx scripts/classify-existing.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",

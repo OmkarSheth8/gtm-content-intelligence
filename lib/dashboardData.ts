@@ -16,6 +16,7 @@ export interface MetricsData {
   totalViews: string;        // formatted: "61,650"
   avgEngagementRate: string; // formatted: "5.3%"
   topTopic: string;
+  topFormat: string;
   videoCount: number;
 }
 
@@ -88,10 +89,13 @@ export async function getDashboardData() {
       }
     : null;
 
-  // Compute aggregate metrics from the latest snapshot per item
+  // Compute aggregate metrics from the latest snapshot per item.
+  // topTopic and topFormat are determined by highest avg views (not frequency),
+  // so they reflect performance rather than volume of content.
   let totalViewsNum = 0;
   const engagementRates: number[] = [];
-  const topicCounts: Record<string, number> = {};
+  const topicViews: Record<string, { total: number; count: number }> = {};
+  const formatViews: Record<string, { total: number; count: number }> = {};
 
   for (const item of items) {
     const latest = item.metricSnapshots[item.metricSnapshots.length - 1];
@@ -102,7 +106,17 @@ export async function getDashboardData() {
       engagementRates.push((latest.likes + latest.comments) / v);
     }
     const topic = item.classification?.topic;
-    if (topic) topicCounts[topic] = (topicCounts[topic] ?? 0) + 1;
+    if (topic) {
+      if (!topicViews[topic]) topicViews[topic] = { total: 0, count: 0 };
+      topicViews[topic].total += v;
+      topicViews[topic].count += 1;
+    }
+    const format = item.classification?.format;
+    if (format) {
+      if (!formatViews[format]) formatViews[format] = { total: 0, count: 0 };
+      formatViews[format].total += v;
+      formatViews[format].count += 1;
+    }
   }
 
   const avgRate =
@@ -111,12 +125,20 @@ export async function getDashboardData() {
       : 0;
 
   const topTopic =
-    Object.entries(topicCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+    Object.entries(topicViews)
+      .sort((a, b) => b[1].total / b[1].count - a[1].total / a[1].count)
+      .map(([topic]) => topic)[0] ?? "—";
+
+  const topFormat =
+    Object.entries(formatViews)
+      .sort((a, b) => b[1].total / b[1].count - a[1].total / a[1].count)
+      .map(([format]) => format)[0] ?? "—";
 
   const metrics: MetricsData = {
     totalViews: totalViewsNum.toLocaleString(),
     avgEngagementRate: (avgRate * 100).toFixed(1) + "%",
     topTopic,
+    topFormat,
     videoCount: items.length,
   };
 

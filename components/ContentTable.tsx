@@ -78,11 +78,11 @@ export default function ContentTable({ rows }: Props) {
                         {row.topic}
                       </span>
                     ) : (
-                      "—"
+                      <span className="text-zinc-400 text-xs">Uncategorized</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-zinc-500 capitalize">
-                    {row.format ?? "—"}
+                    {row.format ?? <span className="text-zinc-400 text-xs">Uncategorized</span>}
                   </td>
                   <td className="px-4 py-3 text-zinc-500">{row.publishedAt}</td>
                 </tr>

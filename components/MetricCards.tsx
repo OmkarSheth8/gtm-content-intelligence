@@ -2,6 +2,7 @@ interface MetricsData {
   totalViews: string;
   avgEngagementRate: string;
   topTopic: string;
+  topFormat: string;
   videoCount: number;
 }
 
@@ -13,12 +14,13 @@ export default function MetricCards({ metrics }: Props) {
   const cards = [
     { label: "Total Views", value: metrics.totalViews },
     { label: "Avg Engagement Rate", value: metrics.avgEngagementRate },
-    { label: "Top Performing Topic", value: metrics.topTopic },
+    { label: "Top Topic by Views", value: metrics.topTopic },
+    { label: "Top Format by Views", value: metrics.topFormat },
     { label: "Videos Tracked", value: String(metrics.videoCount) },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
       {cards.map((card) => (
         <div
           key={card.label}
