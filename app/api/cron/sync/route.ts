@@ -18,8 +18,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await runSync("cron");
-    return NextResponse.json({ ok: true, ...result });
+    const results = await runSync("cron");
+    return NextResponse.json({ ok: true, results });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Sync failed" },

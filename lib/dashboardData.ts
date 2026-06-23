@@ -63,15 +63,15 @@ export interface ROIResult {
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
-export async function getDashboardData() {
+export async function getDashboardData(platformAccountId: string) {
   const [latestSync, items] = await Promise.all([
     prisma.syncRun.findFirst({
-      where: { status: "success" },
+      where: { platformAccountId, status: "success" },
       orderBy: { startedAt: "desc" },
     }),
     prisma.contentItem.findMany({
+      where: { platformAccountId },
       include: {
-        // All snapshots (asc) so the last element is the most recent
         metricSnapshots: { orderBy: { snapshotAt: "asc" } },
         classification: true,
       },
@@ -79,7 +79,6 @@ export async function getDashboardData() {
     }),
   ]);
 
-  // Serialize latest sync
   const syncData: SyncStatusData | null = latestSync
     ? {
         completedAt: latestSync.completedAt?.toISOString() ?? null,
@@ -90,8 +89,7 @@ export async function getDashboardData() {
     : null;
 
   // Compute aggregate metrics from the latest snapshot per item.
-  // topTopic and topFormat are determined by highest avg views (not frequency),
-  // so they reflect performance rather than volume of content.
+  // topTopic and topFormat are determined by highest avg views (not frequency).
   let totalViewsNum = 0;
   const engagementRates: number[] = [];
   const topicViews: Record<string, { total: number; count: number }> = {};
@@ -187,9 +185,11 @@ export async function getDashboardData() {
 
 // ─── Recommendations ──────────────────────────────────────────────────────────
 
-export async function getRecommendationsData(): Promise<RecommendationRow[]> {
+export async function getRecommendationsData(
+  platformAccountId: string
+): Promise<RecommendationRow[]> {
   const recs = await prisma.recommendation.findMany({
-    where: { status: "active" },
+    where: { platformAccountId, status: "active" },
     orderBy: { generatedAt: "desc" },
   });
   return recs.map((r) => ({
@@ -207,12 +207,13 @@ export async function getRecommendationsData(): Promise<RecommendationRow[]> {
 
 // ─── ROI ─────────────────────────────────────────────────────────────────────
 
-export async function getROIData(): Promise<ROIResult> {
+export async function getROIData(platformAccountId: string): Promise<ROIResult> {
+  // Filter events via the content item's platform account
   const allEvents = await prisma.contentEvent.findMany({
+    where: { contentItem: { platformAccountId } },
     select: { eventType: true },
   });
 
-  // Count in TypeScript — avoids any groupBy API differences
   const countMap: Record<string, number> = {};
   for (const e of allEvents) {
     countMap[e.eventType] = (countMap[e.eventType] ?? 0) + 1;

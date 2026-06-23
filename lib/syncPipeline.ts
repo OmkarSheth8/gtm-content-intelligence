@@ -6,49 +6,47 @@ import { YouTubeAdapter } from "@/lib/youtube";
 export interface SyncSummary {
   syncRunId: string;
   trigger: string;
+  platformAccountId: string;
+  accountName: string;
   recordsPulled: number;
   recordsUpserted: number;
   snapshotsInserted: number;
 }
 
-export async function runSync(
+const PROTECTED_CLASSIFIERS = new Set(["seed", "manual", "llm", "ai"]);
+
+// ─── Single-account sync ──────────────────────────────────────────────────────
+
+// Syncs one PlatformAccount identified by its DB id.
+// Fetches content from YouTube, upserts items, inserts snapshots,
+// classifies, and regenerates recommendations.
+export async function runSyncForAccount(
+  platformAccountId: string,
   trigger: "cron" | "manual"
 ): Promise<SyncSummary> {
-  const channelId = process.env.YOUTUBE_CHANNEL_ID;
-  const apiKey = process.env.YOUTUBE_API_KEY;
+  const account = await prisma.platformAccount.findUnique({
+    where: { id: platformAccountId },
+  });
 
-  if (!channelId || !apiKey) {
-    throw new Error(
-      "YOUTUBE_CHANNEL_ID and YOUTUBE_API_KEY must be set in environment"
-    );
+  if (!account) {
+    throw new Error(`Platform account not found: ${platformAccountId}`);
   }
 
-  // Create a sync run record immediately so every attempt is traceable
+  const channelId = account.accountId;
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) throw new Error("YOUTUBE_API_KEY is not set");
+
   const syncRun = await prisma.syncRun.create({
-    data: { platform: "youtube", trigger, status: "running" },
+    data: { platform: "youtube", trigger, status: "running", platformAccountId },
   });
 
   try {
     const adapter = new YouTubeAdapter();
 
-    // Ensure the platform account row exists for this channel
-    const account = await prisma.platformAccount.upsert({
-      where: {
-        platform_accountId: { platform: "youtube", accountId: channelId },
-      },
-      update: { accountName: channelId },
-      create: {
-        platform: "youtube",
-        accountId: channelId,
-        accountName: channelId,
-      },
-    });
-
     // Fetch all content from the uploads playlist
     const contentPayloads = await adapter.fetchContent(channelId);
 
     // Upsert each video as a ContentItem row
-    // @@unique([platform, platformContentId]) ensures idempotency
     const contentIdMap = new Map<string, string>(); // platformContentId → DB id
     let recordsUpserted = 0;
 
@@ -67,7 +65,7 @@ export async function runSync(
           thumbnailUrl: payload.thumbnailUrl ?? null,
         },
         create: {
-          platformAccountId: account.id,
+          platformAccountId,
           platform: "youtube",
           platformContentId: payload.platformContentId,
           title: payload.title,
@@ -98,19 +96,15 @@ export async function runSync(
         data: {
           contentItemId,
           snapshotAt: metric.snapshotAt,
-          views: metric.views,               // bigint → BigInt schema field
-          likes: Number(metric.likes),        // bigint → Int schema field
-          comments: Number(metric.comments),  // bigint → Int schema field
+          views: metric.views,
+          likes: Number(metric.likes),
+          comments: Number(metric.comments),
         },
       });
       snapshotsInserted++;
     }
 
-    // Classify newly synced content.
-    // Protected classifiers (seed, manual, llm, ai) are never overwritten.
-    // Only items with no classification or an existing "rules" classification are updated.
-    const PROTECTED_CLASSIFIERS = new Set(["seed", "manual", "llm", "ai"]);
-
+    // Classify newly synced content — protected classifiers are never overwritten
     const existingClassifications = await prisma.contentClassification.findMany({
       where: { contentItemId: { in: Array.from(contentIdMap.values()) } },
       select: { contentItemId: true, classifiedBy: true },
@@ -156,9 +150,9 @@ export async function runSync(
       });
     }
 
-    // Refresh recommendations after new data lands — best-effort, never fails the sync
+    // Refresh recommendations for this account — best-effort, never fails the sync
     try {
-      await generateAndPersistRecommendations(prisma);
+      await generateAndPersistRecommendations(prisma, platformAccountId);
     } catch (err) {
       console.warn(
         "Recommendation generation skipped:",
@@ -166,7 +160,6 @@ export async function runSync(
       );
     }
 
-    // Mark the run successful with counts
     await prisma.syncRun.update({
       where: { id: syncRun.id },
       data: {
@@ -181,6 +174,8 @@ export async function runSync(
     return {
       syncRunId: syncRun.id,
       trigger,
+      platformAccountId,
+      accountName: account.accountName,
       recordsPulled: contentPayloads.length,
       recordsUpserted,
       snapshotsInserted,
@@ -188,7 +183,6 @@ export async function runSync(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
 
-    // Best-effort update — don't mask the original error if this also fails
     await prisma.syncRun
       .update({
         where: { id: syncRun.id },
@@ -198,4 +192,54 @@ export async function runSync(
 
     throw err;
   }
+}
+
+// ─── All-accounts sync ────────────────────────────────────────────────────────
+
+// Syncs all PlatformAccounts in DB.
+// If no accounts exist, falls back to YOUTUBE_CHANNEL_ID env var and creates
+// the account — this handles fresh deploys before any channel is added via UI.
+export async function runSync(
+  trigger: "cron" | "manual"
+): Promise<SyncSummary[]> {
+  const accounts = await prisma.platformAccount.findMany({
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (accounts.length === 0) {
+    const channelId = process.env.YOUTUBE_CHANNEL_ID;
+    const apiKey = process.env.YOUTUBE_API_KEY;
+
+    if (!channelId || !apiKey) {
+      throw new Error(
+        "No platform accounts in database and YOUTUBE_CHANNEL_ID / YOUTUBE_API_KEY are not set"
+      );
+    }
+
+    const account = await prisma.platformAccount.upsert({
+      where: { platform_accountId: { platform: "youtube", accountId: channelId } },
+      update: { accountName: channelId },
+      create: {
+        platform: "youtube",
+        accountId: channelId,
+        accountName: channelId,
+      },
+    });
+
+    return [await runSyncForAccount(account.id, trigger)];
+  }
+
+  const results: SyncSummary[] = [];
+  for (const account of accounts) {
+    try {
+      results.push(await runSyncForAccount(account.id, trigger));
+    } catch (err) {
+      console.warn(
+        `Sync failed for account "${account.accountName}" (${account.id}):`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  return results;
 }

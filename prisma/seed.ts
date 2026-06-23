@@ -284,6 +284,7 @@ async function main() {
       expectedOutcome: "Higher qualified landing page views and demo requests",
       status: "active",
       modelVersion: "seed-demo",
+      platformAccountId: account.id,
     },
   });
 
@@ -300,6 +301,7 @@ async function main() {
       expectedOutcome: "More decision-stage engagement",
       status: "active",
       modelVersion: "seed-demo",
+      platformAccountId: account.id,
     },
   });
 
@@ -316,6 +318,7 @@ async function main() {
       expectedOutcome: "More clicks from consideration-stage content",
       status: "active",
       modelVersion: "seed-demo",
+      platformAccountId: account.id,
     },
   });
 
@@ -328,6 +331,7 @@ async function main() {
       recordsPulled: seedItems.length,
       recordsUpserted: seedItems.length,
       snapshotsInserted: seedItems.length * 2,
+      platformAccountId: account.id,
       metadata: {
         source: "seed",
       },

@@ -1,6 +1,6 @@
 // Rule-based recommendation engine (Phase 6).
 // Reads classification + metric + ROI data from the DB, scores patterns,
-// and persists up to 3 "rules-v1" recommendations.
+// and persists up to 3 "rules-v1" recommendations scoped to one platformAccountId.
 // No LLM required.
 
 import { PrismaClient } from "@/generated/prisma/client";
@@ -27,7 +27,6 @@ interface PatternGroup {
   titles: string[];
 }
 
-// Accumulator used while iterating items before averaging
 interface Acc {
   totalViews: number;
   totalEngRate: number;
@@ -89,9 +88,6 @@ function accToGroups(map: AccMap): PatternGroup[] {
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
-// Weights: views 40%, engagement 30%, ROI signal 15%, sample depth 15%.
-// Additional multiplier for thin samples: <2 items → 0.85×, <3 → 0.92×, else 1.0×.
-// Result clamped to [0.10, 0.95].
 function computeConfidence(
   p: PatternGroup,
   maxAvgViews: number,
@@ -116,8 +112,6 @@ function computeConfidence(
 
 // ─── Topic-scoped hook / angle ────────────────────────────────────────────────
 
-// Returns the hook (or angle) with the highest average views among items that
-// share the given topic. Falls back to a meaningful default string if no data.
 function getBestScopedDim(
   topic: string,
   scopedMap: ScopedDimMap,
@@ -140,8 +134,6 @@ function getBestScopedDim(
 
 // ─── Format selection with topic+format dedup ─────────────────────────────────
 
-// Tries each format in preference order; skips any already in usedCombinations.
-// Returns the first unused topic::format pair, or the top format if all used.
 function selectFormat(
   preferredFormats: PatternGroup[],
   topic: string,
@@ -196,11 +188,13 @@ function buildExpectedOutcome(p: PatternGroup): string {
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function generateAndPersistRecommendations(
-  prisma: PrismaClient
+  prisma: PrismaClient,
+  platformAccountId: string
 ): Promise<Recommendation[]> {
-  // ── 1. Fetch all items with latest snapshot, classification, ROI events ──
+  // ── 1. Fetch items for this account with latest snapshot + classification + ROI ──
 
   const items = await prisma.contentItem.findMany({
+    where: { platformAccountId },
     include: {
       classification: true,
       metricSnapshots: { orderBy: { snapshotAt: "desc" }, take: 1 },
@@ -218,7 +212,6 @@ export async function generateAndPersistRecommendations(
   const topicHookScope: ScopedDimMap = new Map();
   const topicAngleScope: ScopedDimMap = new Map();
 
-  // topic → format → demoRequests for ROI-grounded format selection in Slot 3
   const topicFormatROI = new Map<string, Map<string, number>>();
 
   for (const item of items) {
@@ -246,7 +239,6 @@ export async function generateAndPersistRecommendations(
   const topicGroups = accToGroups(topicAcc);
   const formatGroups = accToGroups(formatAcc);
 
-  // Nothing to recommend without classified content
   if (topicGroups.length === 0) return [];
 
   // ── 3. Normalization denominators ─────────────────────────────────────────
@@ -254,32 +246,25 @@ export async function generateAndPersistRecommendations(
   const maxAvgViews = Math.max(...topicGroups.map((p) => p.avgViews));
   const maxAvgEngRate = Math.max(...topicGroups.map((p) => p.avgEngRate));
 
-  // ── 4. Sorted topic pools for slot selection ──────────────────────────────
+  // ── 4. Sorted topic pools ─────────────────────────────────────────────────
 
   const byViews = [...topicGroups].sort((a, b) => b.avgViews - a.avgViews);
   const byEngRate = [...topicGroups].sort((a, b) => b.avgEngRate - a.avgEngRate);
   const byROI = [...topicGroups].sort((a, b) => b.demoRequests - a.demoRequests);
 
-  // Slot 1: highest avg views
   const slot1Topic = byViews[0];
+  const slot2Topic = byEngRate.find((p) => p.value !== slot1Topic.value) ?? null;
 
-  // Slot 2: highest engagement rate — must be a different topic than Slot 1
-  const slot2Topic =
-    byEngRate.find((p) => p.value !== slot1Topic.value) ?? null;
-
-  // Slot 3: highest ROI signal — must differ from both Slot 1 and Slot 2
   const usedTopics = new Set(
     [slot1Topic.value, slot2Topic?.value].filter(Boolean) as string[]
   );
-  const slot3Topic =
-    byROI.find((p) => !usedTopics.has(p.value)) ?? null;
+  const slot3Topic = byROI.find((p) => !usedTopics.has(p.value)) ?? null;
 
   // ── 5. Format pools ───────────────────────────────────────────────────────
 
   const formatsByViews = [...formatGroups].sort((a, b) => b.avgViews - a.avgViews);
   const formatsByEngRate = [...formatGroups].sort((a, b) => b.avgEngRate - a.avgEngRate);
 
-  // For Slot 3: prefer the format most associated with ROI for that topic
   function roiFormatsForTopic(topic: string): PatternGroup[] {
     const fMap = topicFormatROI.get(topic);
     if (!fMap) return formatsByViews;
@@ -310,7 +295,6 @@ export async function generateAndPersistRecommendations(
   ): void {
     if (!topicP) return;
 
-    // Merge preferred formats with global fallback so selectFormat always has options
     const allFormats = [
       ...preferredFormats,
       ...formatsByViews.filter(
@@ -343,10 +327,10 @@ export async function generateAndPersistRecommendations(
 
   if (generated.length === 0) return [];
 
-  // ── 7. Dismiss old rules-v1 active recommendations ───────────────────────
+  // ── 7. Dismiss old rules-v1 active recommendations for this account ────────
 
   await prisma.recommendation.updateMany({
-    where: { modelVersion: "rules-v1", status: "active" },
+    where: { platformAccountId, modelVersion: "rules-v1", status: "active" },
     data: { status: "dismissed" },
   });
 
@@ -380,6 +364,7 @@ export async function generateAndPersistRecommendations(
         historicalExamples,
         status: "active",
         modelVersion: "rules-v1",
+        platformAccountId,
       },
     });
   }

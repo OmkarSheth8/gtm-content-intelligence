@@ -13,7 +13,8 @@
     "youtube:diagnose": "tsx scripts/diagnose-youtube.ts",
     "classify": "tsx scripts/classify-existing.ts",
     "recommend": "tsx scripts/generate-recommendations.ts",
-    "roi:test": "tsx scripts/test-roi-event.ts"
+    "roi:test": "tsx scripts/test-roi-event.ts",
+    "backfill": "tsx scripts/backfill-account-scoping.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",

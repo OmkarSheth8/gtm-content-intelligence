@@ -10,7 +10,11 @@ const CHUNK_SIZE = 50; // videos.list accepts up to 50 IDs per request
 
 interface ChannelsListResponse {
   items?: Array<{
-    contentDetails: {
+    id: string;
+    snippet: {
+      title: string;
+    };
+    contentDetails?: {
       relatedPlaylists: {
         uploads: string;
       };
@@ -85,6 +89,125 @@ async function fetchYouTube<T>(url: string, endpoint: string): Promise<T> {
     throw new Error(message);
   }
   return res.json() as Promise<T>;
+}
+
+// ─── Channel input normalizer ─────────────────────────────────────────────────
+
+export type ParsedChannelInput =
+  | { kind: "channelId"; value: string }  // UCxxxxxxxxxxxxxxxxxxxxxxxxx
+  | { kind: "handle"; value: string }     // @handle (without @)
+  | { kind: "username"; value: string }   // legacy /c/ or /user/ name
+  | { kind: "invalid"; reason: string };
+
+// Accepts UC channel IDs, @handles, youtube.com URLs in several formats.
+// Returns a tagged union describing how to query the YouTube API.
+export function normalizeYouTubeChannelInput(raw: string): ParsedChannelInput {
+  const input = raw.trim();
+  if (!input) return { kind: "invalid", reason: "Input is empty." };
+
+  // Try URL parsing for anything that looks like a URL or youtube.com path
+  const looksLikeUrl = input.includes("youtube.com") || input.startsWith("http");
+  if (looksLikeUrl) {
+    try {
+      const url = new URL(input.startsWith("http") ? input : `https://${input}`);
+      const isYT =
+        url.hostname === "youtube.com" || url.hostname === "www.youtube.com";
+
+      if (!isYT) {
+        return { kind: "invalid", reason: "URL does not point to youtube.com." };
+      }
+
+      const p = url.pathname;
+
+      // /channel/UCxxxxxx
+      const channelMatch = p.match(/^\/channel\/(UC[\w-]{22})\/?$/);
+      if (channelMatch) return { kind: "channelId", value: channelMatch[1] };
+
+      // /@handle
+      const handleMatch = p.match(/^\/@([\w.-]+)\/?$/);
+      if (handleMatch) return { kind: "handle", value: handleMatch[1] };
+
+      // /c/customname  or  /user/username
+      const legacyMatch = p.match(/^\/(?:c|user)\/([\w.-]+)\/?$/);
+      if (legacyMatch) return { kind: "username", value: legacyMatch[1] };
+
+      return {
+        kind: "invalid",
+        reason:
+          "Unrecognised YouTube URL format. Try youtube.com/channel/UC…, youtube.com/@handle, or youtube.com/c/name.",
+      };
+    } catch {
+      // Not a valid URL despite looking like one
+    }
+  }
+
+  // Raw UC channel ID
+  if (/^UC[\w-]{22}$/.test(input)) {
+    return { kind: "channelId", value: input };
+  }
+
+  // @handle (explicit)
+  if (input.startsWith("@")) {
+    const handle = input.slice(1);
+    if (!handle) return { kind: "invalid", reason: 'Handle cannot be empty after "@".' };
+    return { kind: "handle", value: handle };
+  }
+
+  // Bare word — treat as handle (most common user intent)
+  if (/^[\w.-]+$/.test(input)) {
+    return { kind: "handle", value: input };
+  }
+
+  return {
+    kind: "invalid",
+    reason:
+      "Could not parse this as a channel ID (UCxxxxxxx), handle (@name), or YouTube URL.",
+  };
+}
+
+// ─── Channel info lookup ──────────────────────────────────────────────────────
+
+export interface ChannelInfo {
+  channelId: string;    // resolved UC-prefixed ID
+  displayName: string;
+}
+
+// Validates the parsed input against the YouTube API and returns the resolved
+// channel ID and display name. Returns null if the channel does not exist.
+// Throws on API errors (missing key, quota exceeded, etc.).
+export async function getChannelInfo(
+  parsed: ParsedChannelInput
+): Promise<ChannelInfo | null> {
+  if (parsed.kind === "invalid") return null;
+
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) throw new Error("YOUTUBE_API_KEY is not set");
+
+  const url = new URL("https://www.googleapis.com/youtube/v3/channels");
+  url.searchParams.set("part", "snippet");
+  url.searchParams.set("key", apiKey);
+
+  if (parsed.kind === "channelId") {
+    url.searchParams.set("id", parsed.value);
+  } else if (parsed.kind === "handle") {
+    url.searchParams.set("forHandle", parsed.value);
+  } else {
+    // username — legacy forUsername
+    url.searchParams.set("forUsername", parsed.value);
+  }
+
+  const data = await fetchYouTube<ChannelsListResponse>(
+    url.toString(),
+    "channels.list(snippet)"
+  );
+
+  const item = data.items?.[0];
+  if (!item) return null;
+
+  return {
+    channelId: item.id,
+    displayName: item.snippet.title,
+  };
 }
 
 // ─── Adapter ──────────────────────────────────────────────────────────────────

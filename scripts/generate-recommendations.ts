@@ -17,12 +17,34 @@ async function main() {
   const prisma = new PrismaClient({ adapter });
 
   try {
+    // Resolve platformAccountId from CLI arg or first account in DB
+    const argAccountId = process.argv
+      .find((a) => a.startsWith("--accountId="))
+      ?.split("=")[1];
+
+    let platformAccountId = argAccountId;
+
+    if (!platformAccountId) {
+      const first = await prisma.platformAccount.findFirst({
+        orderBy: { createdAt: "asc" },
+        select: { id: true, accountName: true },
+      });
+      if (!first) {
+        console.log("No platform accounts found. Run npm run seed first.");
+        return;
+      }
+      platformAccountId = first.id;
+      console.log(`Using account: ${first.accountName} (${first.id})\n`);
+    }
+
     console.log("Generating recommendations from analytics patterns...\n");
 
-    const recs = await generateAndPersistRecommendations(prisma);
+    const recs = await generateAndPersistRecommendations(prisma, platformAccountId);
 
     if (recs.length === 0) {
-      console.log("No recommendations generated. Need classified content with metric snapshots.");
+      console.log(
+        "No recommendations generated. Need classified content with metric snapshots."
+      );
       return;
     }
 
@@ -30,15 +52,15 @@ async function main() {
     for (let i = 0; i < recs.length; i++) {
       const rec = recs[i];
       console.log(`  [${i + 1}] ${rec.topic} — ${rec.format}`);
-      console.log(`       hook     : ${rec.hook}`);
-      console.log(`       angle    : ${rec.angle}`);
+      console.log(`       hook      : ${rec.hook}`);
+      console.log(`       angle     : ${rec.angle}`);
       console.log(`       confidence: ${(rec.confidenceScore * 100).toFixed(0)}%`);
-      console.log(`       type     : ${rec.recommendationType}`);
-      console.log(`       outcome  : ${rec.expectedOutcome}`);
+      console.log(`       type      : ${rec.recommendationType}`);
+      console.log(`       outcome   : ${rec.expectedOutcome}`);
       console.log();
     }
 
-    console.log("Done. Visit /recommendations to see the updated panel.");
+    console.log("Done. Visit /recommendations?accountId=<id> to see the updated panel.");
   } finally {
     await prisma.$disconnect();
   }
