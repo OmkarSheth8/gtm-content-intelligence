@@ -36,9 +36,9 @@ export async function POST(request: Request) {
     const results = await runSync("manual");
     return NextResponse.json({ ok: true, results });
   } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Sync failed" },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : "Sync failed";
+    // "Platform account not found" is a caller error — 400, not 500
+    const status = message.startsWith("Platform account not found") ? 400 : 500;
+    return NextResponse.json({ ok: false, error: message }, { status });
   }
 }
