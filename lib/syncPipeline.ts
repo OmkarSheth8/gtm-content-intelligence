@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { classifyContent } from "@/lib/classification";
 import { generateAndPersistRecommendations } from "@/lib/recommendations";
 import { YouTubeAdapter } from "@/lib/youtube";
+import { RssAdapter } from "@/lib/rss";
 
 export interface SyncSummary {
   syncRunId: string;
@@ -32,19 +33,18 @@ export async function runSyncForAccount(
     throw new Error(`Platform account not found: ${platformAccountId}`);
   }
 
-  const channelId = account.accountId;
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) throw new Error("YOUTUBE_API_KEY is not set");
-
   const syncRun = await prisma.syncRun.create({
-    data: { platform: "youtube", trigger, status: "running", platformAccountId },
+    data: { platform: account.platform, trigger, status: "running", platformAccountId },
   });
 
   try {
-    const adapter = new YouTubeAdapter();
+    const adapter = (() => {
+      if (account.platform === "youtube") return new YouTubeAdapter();
+      if (account.platform === "rss") return new RssAdapter();
+      throw new Error(`Unsupported platform: "${account.platform}"`);
+    })();
 
-    // Fetch all content from the uploads playlist
-    const contentPayloads = await adapter.fetchContent(channelId);
+    const contentPayloads = await adapter.fetchContent(account.accountId);
 
     // Upsert each video as a ContentItem row
     const contentIdMap = new Map<string, string>(); // platformContentId → DB id
@@ -54,7 +54,7 @@ export async function runSyncForAccount(
       const item = await prisma.contentItem.upsert({
         where: {
           platform_platformContentId: {
-            platform: "youtube",
+            platform: account.platform,
             platformContentId: payload.platformContentId,
           },
         },
@@ -66,7 +66,7 @@ export async function runSyncForAccount(
         },
         create: {
           platformAccountId,
-          platform: "youtube",
+          platform: account.platform,
           platformContentId: payload.platformContentId,
           title: payload.title,
           description: payload.description,
